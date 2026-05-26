@@ -97,9 +97,25 @@ CLIENT_ORIGIN
 SERVER_PUBLIC_URL
 SOCKET_CORS_ORIGINS
 ROOM_TTL_MINUTES
+SAVE_ENCRYPTION_SECRET
 ```
 
 The server must validate environment variables at startup and fail fast with clear messages.
+
+### Local Setup Script
+
+The repo includes a root-level `setup.sh` script for first-time local setup.
+
+Behavior:
+
+- Verifies Node.js 20.16.0 or newer is installed.
+- Verifies npm 10 or newer is installed.
+- Creates `.env` from `.env.example` when `.env` does not already exist.
+- Preserves an existing `.env` file unchanged.
+- Runs `npm install` from the repo root.
+- Prints the server/client commands needed to start the game.
+
+The script is intentionally local-development focused. It does not start long-running dev servers by itself because the server and client are separate processes.
 
 ## 6. High-Level Architecture
 

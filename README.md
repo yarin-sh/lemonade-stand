@@ -15,7 +15,17 @@ A retro browser lemonade-stand game with single-player progression, local encryp
 - Node.js 20.16.0 or newer
 - npm 10 or newer
 
-## Install
+## Quick Setup
+
+After cloning the repo, run:
+
+```bash
+./setup.sh
+```
+
+The setup script checks your Node/npm versions, creates `.env` from `.env.example` if needed, installs dependencies, and prints the run commands.
+
+## Manual Install
 
 ```bash
 npm install
@@ -37,6 +47,8 @@ SAVE_ENCRYPTION_SECRET=replace-this-with-at-least-32-random-characters
 ```
 
 For local development, the placeholder save secret is fine. For any shared or public deployment, use a real random value with at least 32 characters.
+
+The setup script creates this file automatically when `.env` does not already exist.
 
 ## Run Locally
 
