@@ -1,5 +1,7 @@
 import type { z } from "zod";
 import type {
+  autoPlayerInputSchema,
+  autoPlayerRiskProfileSchema,
   chatMessageInputSchema,
   economyConfigSchema,
   gameModeSchema,
@@ -21,8 +23,10 @@ export type GameMode = z.infer<typeof gameModeSchema>;
 export type RoomVisibility = z.infer<typeof roomVisibilitySchema>;
 export type WeatherMode = z.infer<typeof weatherModeSchema>;
 export type TriviaTargeting = z.infer<typeof triviaTargetingSchema>;
+export type AutoPlayerRiskProfile = z.infer<typeof autoPlayerRiskProfileSchema>;
 export type Nickname = z.infer<typeof nicknameSchema>;
 export type SetupInput = z.infer<typeof setupInputSchema>;
+export type AutoPlayerInput = z.infer<typeof autoPlayerInputSchema>;
 export type RoomSettings = z.infer<typeof roomSettingsSchema>;
 export type RoomCreateInput = z.infer<typeof roomCreateInputSchema>;
 export type RoomJoinInput = z.infer<typeof roomJoinInputSchema>;
@@ -76,6 +80,7 @@ export const socketEvents = {
     singleplayerAnswerTrivia: "singleplayer:answerTrivia",
     singleplayerLoad: "singleplayer:load",
     singleplayerStart: "singleplayer:start",
+    singleplayerAutoRun: "singleplayer:autoRun",
     singleplayerSubmitSetup: "singleplayer:submitSetup",
     roomCreate: "room:create",
     roomJoin: "room:join",

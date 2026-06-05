@@ -3,17 +3,25 @@ import type { Server, Socket } from "socket.io";
 import {
   createSeededRandom,
   defaultEconomyConfig,
+  autoPlayerInputSchema,
   generateWeather,
   getCupCost,
   getMaxPrice,
   getMaxPosters,
   getPosterCost,
+  getPosterSpend,
   getTriviaQuestionCount,
   setupInputSchema,
   simulateDay,
   socketEvents,
+  type AutoPlayerInput,
+  type AutoPlayerRiskProfile,
   triviaAnswerInputSchema,
   type PlayerDayResult,
+  type SetupInput,
+  type SingleplayerAutoRunDayLog,
+  type SingleplayerAutoRunResult,
+  type SingleplayerAutoRunStopReason,
   type SingleplayerSavePayload,
   type SingleplayerPhase,
   type SingleplayerSnapshot,
@@ -36,7 +44,7 @@ type TriviaState = {
   questions: TriviaQuestion[];
 };
 
-type SingleplayerState = {
+export type SingleplayerState = {
   seed: string;
   phase: SingleplayerPhase;
   day: number;
@@ -55,6 +63,45 @@ const sessions = new Map<string, SingleplayerState>();
 type SingleplayerHandlerOptions = {
   saveSecret: string;
 };
+
+type AutoPlayerRiskSettings = {
+  gainMultiplier: number;
+  spendPct: number;
+  posterSpendShare: number;
+  posterCap: number;
+  priceMultiplier: number;
+};
+
+const autoPlayerRiskSettings = {
+  safe: {
+    gainMultiplier: 0.85,
+    spendPct: 0.35,
+    posterSpendShare: 0.3,
+    posterCap: 4,
+    priceMultiplier: 2.2
+  },
+  balanced: {
+    gainMultiplier: 0.8,
+    spendPct: 0.55,
+    posterSpendShare: 0.32,
+    posterCap: 7,
+    priceMultiplier: 3.4
+  },
+  risky: {
+    gainMultiplier: 0.75,
+    spendPct: 0.75,
+    posterSpendShare: 0.34,
+    posterCap: 12,
+    priceMultiplier: 6.5
+  },
+  wild: {
+    gainMultiplier: 0.7,
+    spendPct: 0.95,
+    posterSpendShare: 0.36,
+    posterCap: 20,
+    priceMultiplier: 11
+  }
+} satisfies Record<AutoPlayerRiskProfile, AutoPlayerRiskSettings>;
 
 const triviaBank: TriviaQuestion[] = [
   {
@@ -176,6 +223,49 @@ export function registerSingleplayerHandlers(io: Server, options: SingleplayerHa
           message: getSingleplayerSetupErrorMessage(code)
         });
       }
+    });
+
+    socket.on(socketEvents.client.singleplayerAutoRun, (payload) => {
+      const state = sessions.get(socket.id) ?? createInitialState();
+      sessions.set(socket.id, state);
+
+      if (state.phase !== "SETUP") {
+        socket.emit(socketEvents.server.commandError, {
+          code: "INVALID_PHASE",
+          message: "Auto Player can only start during setup."
+        });
+        return;
+      }
+
+      const parsed = autoPlayerInputSchema.safeParse(payload);
+
+      if (!parsed.success) {
+        socket.emit(socketEvents.server.commandError, {
+          code: "INVALID_SETUP",
+          message: "Auto Player settings are invalid."
+        });
+        return;
+      }
+
+      if (state.coins < getCupCost(state.day)) {
+        socket.emit(socketEvents.server.commandError, {
+          code: "INSUFFICIENT_FUNDS",
+          message: "Auto Player needs enough coins for at least one cup."
+        });
+        return;
+      }
+
+      if (parsed.data.stopBalance >= state.coins) {
+        socket.emit(socketEvents.server.commandError, {
+          code: "INVALID_SETUP",
+          message: "Auto Player stop balance must be below your current coins."
+        });
+        return;
+      }
+
+      const autoRunResult = runAutoPlayer(state, parsed.data);
+
+      emitSnapshot(socket, state, options.saveSecret, autoRunResult);
     });
 
     socket.on(socketEvents.client.singleplayerAnswerTrivia, (payload) => {
@@ -388,7 +478,199 @@ function shuffleTriviaQuestionChoices(question: TriviaQuestion, random: () => nu
   };
 }
 
-function emitSnapshot(socket: Socket, state: SingleplayerState, saveSecret: string) {
+export function runAutoPlayer(state: SingleplayerState, input: AutoPlayerInput): SingleplayerAutoRunResult {
+  const logs: SingleplayerAutoRunDayLog[] = [];
+  const startingDay = state.day;
+  const startingCoins = state.coins;
+  let stopReason: SingleplayerAutoRunStopReason = "requested_days";
+
+  delete state.trivia;
+  delete state.lastResult;
+
+  for (let runDay = 0; runDay < input.days; runDay += 1) {
+    if (state.coins < getCupCost(state.day)) {
+      state.phase = "GAME_OVER";
+      stopReason = "broke";
+      break;
+    }
+
+    const setup = createAutoPlayerSetup({
+      day: state.day,
+      coins: state.coins,
+      riskProfile: input.riskProfile,
+      weather: state.weather
+    });
+    const result = applyAutoPlayerGainModifier(simulateDay({
+      day: state.day,
+      startingBalance: state.coins,
+      setup,
+      seed: `${state.seed}:day:${state.day}`,
+      weather: state.weather,
+      autoSubmitted: true
+    }), input.riskProfile);
+
+    logs.push({
+      day: state.day,
+      weather: state.weather,
+      setup,
+      result
+    });
+
+    state.coins = result.endingBalance;
+    state.lastResult = result;
+    advanceToNextDay(state);
+
+    if (state.coins < getCupCost(state.day)) {
+      state.phase = "GAME_OVER";
+      stopReason = "broke";
+      break;
+    }
+
+    if (state.coins <= input.stopBalance) {
+      stopReason = "stop_balance";
+      break;
+    }
+  }
+
+  return createAutoRunResult({
+    input,
+    logs,
+    startingCoins,
+    startingDay,
+    endingDay: state.day,
+    endingCoins: state.coins,
+    stopReason
+  });
+}
+
+export function createAutoPlayerSetup({
+  coins,
+  day,
+  riskProfile,
+  weather
+}: {
+  coins: number;
+  day: number;
+  riskProfile: AutoPlayerRiskProfile;
+  weather: WeatherResult;
+}): SetupInput {
+  const settings = autoPlayerRiskSettings[riskProfile];
+  const cupCost = getCupCost(day);
+  const maxPosters = Math.min(getMaxPosters(), settings.posterCap);
+  const maxPrice = getMaxPrice(cupCost);
+  const spendBudget = Math.max(cupCost, Math.floor(coins * settings.spendPct));
+  const posterBudget = Math.floor(spendBudget * settings.posterSpendShare);
+  let posters = 0;
+
+  while (
+    posters < maxPosters &&
+    getPosterSpend(posters + 1) <= posterBudget &&
+    getPosterSpend(posters + 1) + cupCost <= coins
+  ) {
+    posters += 1;
+  }
+
+  const posterSpend = getPosterSpend(posters);
+  const cupBudget = Math.max(cupCost, Math.min(coins - posterSpend, spendBudget - posterSpend));
+  const cups = Math.max(1, Math.floor(cupBudget / cupCost));
+  const price = Math.max(
+    1,
+    Math.min(maxPrice, Math.round(cupCost * settings.priceMultiplier * weather.priceToleranceModifier))
+  );
+
+  return {
+    cups,
+    posters,
+    price
+  };
+}
+
+export function getAutoPlayerGainMultiplier(riskProfile: AutoPlayerRiskProfile): number {
+  return autoPlayerRiskSettings[riskProfile].gainMultiplier;
+}
+
+function applyAutoPlayerGainModifier(
+  result: PlayerDayResult,
+  riskProfile: AutoPlayerRiskProfile
+): PlayerDayResult {
+  const gainMultiplier = getAutoPlayerGainMultiplier(riskProfile);
+
+  if (gainMultiplier === 1 || result.revenue === 0) {
+    return result;
+  }
+
+  const revenue = Math.floor(result.revenue * gainMultiplier);
+
+  return {
+    ...result,
+    revenue,
+    profit: revenue - result.spend,
+    endingBalance: result.startingBalance - result.spend + revenue
+  };
+}
+
+function createAutoRunResult({
+  endingCoins,
+  endingDay,
+  input,
+  logs,
+  startingCoins,
+  startingDay,
+  stopReason
+}: {
+  endingCoins: number;
+  endingDay: number;
+  input: AutoPlayerInput;
+  logs: SingleplayerAutoRunDayLog[];
+  startingCoins: number;
+  startingDay: number;
+  stopReason: SingleplayerAutoRunStopReason;
+}): SingleplayerAutoRunResult {
+  const totals = logs.reduce(
+    (currentTotals, log) => ({
+      totalProfit: currentTotals.totalProfit + log.result.profit,
+      totalRevenue: currentTotals.totalRevenue + log.result.revenue,
+      totalSpend: currentTotals.totalSpend + log.result.spend,
+      totalVisitors: currentTotals.totalVisitors + log.result.observedVisitors,
+      totalSoldCups: currentTotals.totalSoldCups + log.result.soldCups,
+      totalPurchaseChance: currentTotals.totalPurchaseChance + log.result.purchaseChance
+    }),
+    {
+      totalProfit: 0,
+      totalRevenue: 0,
+      totalSpend: 0,
+      totalVisitors: 0,
+      totalSoldCups: 0,
+      totalPurchaseChance: 0
+    }
+  );
+
+  return {
+    riskProfile: input.riskProfile,
+    requestedDays: input.days,
+    completedDays: logs.length,
+    stopBalance: input.stopBalance,
+    stopReason,
+    startingDay,
+    endingDay,
+    startingCoins,
+    endingCoins,
+    totalProfit: totals.totalProfit,
+    totalRevenue: totals.totalRevenue,
+    totalSpend: totals.totalSpend,
+    totalVisitors: totals.totalVisitors,
+    totalSoldCups: totals.totalSoldCups,
+    averagePurchaseChance: logs.length > 0 ? totals.totalPurchaseChance / logs.length : 0,
+    logs
+  };
+}
+
+function emitSnapshot(
+  socket: Socket,
+  state: SingleplayerState,
+  saveSecret: string,
+  autoRunResult?: SingleplayerAutoRunResult
+) {
   const snapshot: SingleplayerSnapshot = {
     phase: state.phase,
     day: state.day,
@@ -411,6 +693,10 @@ function emitSnapshot(socket: Socket, state: SingleplayerState, saveSecret: stri
 
   if (state.trivia) {
     snapshot.trivia = createTriviaSnapshot(state.trivia);
+  }
+
+  if (autoRunResult) {
+    snapshot.autoRunResult = autoRunResult;
   }
 
   socket.emit(socketEvents.server.singleplayerSnapshot, snapshot);

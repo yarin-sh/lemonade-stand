@@ -5,6 +5,7 @@ A retro browser lemonade-stand game with single-player progression, local encryp
 ## Features
 
 - Single-player day loop with weather, setup, daily summary, rare trivia rewards, and local save/resume.
+- Singleplayer Auto Player that can simulate future days with Safe, Balanced, Risky, or Wild risk.
 - Multiplayer rooms with host/join flow, public/private rooms, and live Socket.IO updates.
 - Lemonade economy with scaling cup costs, poster pricing tiers, visitor simulation, and price tolerance.
 - Retro console-style UI tuned for desktop and mobile screens.

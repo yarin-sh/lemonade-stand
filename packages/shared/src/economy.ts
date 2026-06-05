@@ -1,4 +1,4 @@
-import type { EconomyConfig, SetupInput } from "./types";
+import type { AutoPlayerRiskProfile, EconomyConfig, SetupInput } from "./types";
 
 export type WeatherId =
   | "cold"
@@ -103,6 +103,37 @@ export type SingleplayerSaveData = {
   token: string;
 };
 
+export type SingleplayerAutoRunStopReason =
+  | "requested_days"
+  | "stop_balance"
+  | "broke";
+
+export type SingleplayerAutoRunDayLog = {
+  day: number;
+  weather: WeatherResult;
+  setup: SetupInput;
+  result: PlayerDayResult;
+};
+
+export type SingleplayerAutoRunResult = {
+  riskProfile: AutoPlayerRiskProfile;
+  requestedDays: number;
+  completedDays: number;
+  stopBalance: number;
+  stopReason: SingleplayerAutoRunStopReason;
+  startingDay: number;
+  endingDay: number;
+  startingCoins: number;
+  endingCoins: number;
+  totalProfit: number;
+  totalRevenue: number;
+  totalSpend: number;
+  totalVisitors: number;
+  totalSoldCups: number;
+  averagePurchaseChance: number;
+  logs: SingleplayerAutoRunDayLog[];
+};
+
 export type SingleplayerSnapshot = {
   phase: SingleplayerPhase;
   day: number;
@@ -116,6 +147,7 @@ export type SingleplayerSnapshot = {
   lastResult?: PlayerDayResult;
   saveData?: SingleplayerSaveData;
   trivia?: SingleplayerTriviaSnapshot;
+  autoRunResult?: SingleplayerAutoRunResult;
 };
 
 export type SetupValidationResult =

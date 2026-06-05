@@ -5,9 +5,12 @@ import {
   getPosterSpend,
   getPosterUnitCost,
   socketEvents,
+  type AutoPlayerInput,
+  type AutoPlayerRiskProfile,
   type RoomListItem,
   type RoomSnapshot,
   type SetupInput,
+  type SingleplayerAutoRunResult,
   type SingleplayerSaveData,
   type SingleplayerSnapshot
 } from "@lemonade-game/shared";
@@ -22,6 +25,12 @@ type SetupDraft = {
 
 type AppPage = "home" | "multiplayer" | "singleplayerResume";
 
+type AutoPlayerDraft = {
+  days: string;
+  riskProfile: AutoPlayerRiskProfile;
+  stopBalance: string;
+};
+
 const emptySetupDraft: SetupDraft = {
   cups: "",
   posters: "",
@@ -29,21 +38,48 @@ const emptySetupDraft: SetupDraft = {
 };
 
 const singleplayerSaveKey = "lemonade-game:singleplayer-save:v1";
+const emptyAutoPlayerDraft: AutoPlayerDraft = {
+  days: "",
+  riskProfile: "balanced",
+  stopBalance: "0"
+};
 
 export function App() {
   const socketRef = useRef<Socket | null>(null);
   const singleplayerSetupKeyRef = useRef<string | null>(null);
   const roomSetupKeyRef = useRef<string | null>(null);
   const setupSubmittingRef = useRef(false);
+  const autoRunStartedAtRef = useRef<number | null>(null);
+  const autoRunResultTimerRef = useRef<number | null>(null);
   const [page, setPage] = useState<AppPage>("home");
   const [singleplayer, setSingleplayer] = useState<SingleplayerSnapshot | null>(null);
   const [room, setRoom] = useState<RoomSnapshot | null>(null);
   const [roomList, setRoomList] = useState<RoomListItem[]>([]);
   const [singleplayerSave, setSingleplayerSave] = useState<SingleplayerSaveData | null>(() => readSingleplayerSave());
+  const [autoPlayerDialogOpen, setAutoPlayerDialogOpen] = useState(false);
+  const [autoPlayerLoading, setAutoPlayerLoading] = useState(false);
+  const [autoPlayerLogsOpen, setAutoPlayerLogsOpen] = useState(false);
+  const [autoPlayerResult, setAutoPlayerResult] = useState<SingleplayerAutoRunResult | null>(null);
   const [setup, setSetup] = useState<SetupDraft>(emptySetupDraft);
   const [setupSubmitAttempted, setSetupSubmitAttempted] = useState(false);
   const [setupSubmitting, setSetupSubmitting] = useState(false);
   const [commandError, setCommandError] = useState<string | null>(null);
+
+  const clearAutoRunTimer = () => {
+    if (autoRunResultTimerRef.current) {
+      window.clearTimeout(autoRunResultTimerRef.current);
+      autoRunResultTimerRef.current = null;
+    }
+  };
+
+  const resetAutoPlayerUi = () => {
+    clearAutoRunTimer();
+    autoRunStartedAtRef.current = null;
+    setAutoPlayerDialogOpen(false);
+    setAutoPlayerLoading(false);
+    setAutoPlayerLogsOpen(false);
+    setAutoPlayerResult(null);
+  };
 
   useEffect(() => {
     const socket = serverUrl ? io(serverUrl, {
@@ -81,6 +117,21 @@ export function App() {
       }
 
       singleplayerSetupKeyRef.current = setupKey;
+
+      if (snapshot.autoRunResult) {
+        const startedAt = autoRunStartedAtRef.current ?? Date.now();
+        const waitMs = Math.max(0, 2500 - (Date.now() - startedAt));
+
+        clearAutoRunTimer();
+        autoRunResultTimerRef.current = window.setTimeout(() => {
+          setAutoPlayerResult(snapshot.autoRunResult ?? null);
+          setAutoPlayerLoading(false);
+          setAutoPlayerDialogOpen(false);
+          setAutoPlayerLogsOpen(false);
+          autoRunStartedAtRef.current = null;
+          autoRunResultTimerRef.current = null;
+        }, waitMs);
+      }
     });
     socket.on(socketEvents.server.roomSnapshot, (snapshot: RoomSnapshot) => {
       setupSubmittingRef.current = false;
@@ -107,10 +158,14 @@ export function App() {
     socket.on(socketEvents.server.commandError, (payload: { code?: string; message?: string }) => {
       setupSubmittingRef.current = false;
       setSetupSubmitting(false);
+      clearAutoRunTimer();
+      autoRunStartedAtRef.current = null;
+      setAutoPlayerLoading(false);
       setCommandError(payload.message ?? payload.code ?? "Command failed.");
     });
 
     return () => {
+      clearAutoRunTimer();
       socketRef.current = null;
       socket.disconnect();
     };
@@ -126,6 +181,7 @@ export function App() {
 
   const startNewSingleplayer = () => {
     clearSingleplayerSave();
+    resetAutoPlayerUi();
     setSingleplayerSave(null);
     singleplayerSetupKeyRef.current = null;
     roomSetupKeyRef.current = null;
@@ -143,6 +199,7 @@ export function App() {
       return;
     }
 
+    resetAutoPlayerUi();
     socketRef.current?.emit(socketEvents.client.roomLeave);
     singleplayerSetupKeyRef.current = null;
     roomSetupKeyRef.current = null;
@@ -152,6 +209,7 @@ export function App() {
 
   const requestSingleplayerStart = () => {
     socketRef.current?.emit(socketEvents.client.roomLeave);
+    resetAutoPlayerUi();
     const save = readSingleplayerSave();
 
     if (save) {
@@ -164,6 +222,7 @@ export function App() {
   };
 
   const backHomeFromSingleplayer = () => {
+    resetAutoPlayerUi();
     setSingleplayer(null);
     setRoom(null);
     setPage("home");
@@ -173,6 +232,7 @@ export function App() {
   };
 
   const backHomeFromRoom = () => {
+    resetAutoPlayerUi();
     socketRef.current?.emit(socketEvents.client.roomLeave);
     setRoom(null);
     setSingleplayer(null);
@@ -277,6 +337,17 @@ export function App() {
     socketRef.current?.emit(socketEvents.client.singleplayerSubmitSetup, setupInput);
   };
 
+  const startAutoPlayer = (input: AutoPlayerInput) => {
+    setCommandError(null);
+    clearAutoRunTimer();
+    setAutoPlayerDialogOpen(false);
+    setAutoPlayerLogsOpen(false);
+    setAutoPlayerResult(null);
+    setAutoPlayerLoading(true);
+    autoRunStartedAtRef.current = Date.now();
+    socketRef.current?.emit(socketEvents.client.singleplayerAutoRun, input);
+  };
+
   return (
     <main className="app-shell">
       <div className="machine-shell">
@@ -316,8 +387,19 @@ export function App() {
               setup={setup}
               setupInput={setupInput}
               setupSpend={setupSpend}
+              autoPlayerDialogOpen={autoPlayerDialogOpen}
+              autoPlayerLoading={autoPlayerLoading}
+              autoPlayerLogsOpen={autoPlayerLogsOpen}
+              autoPlayerResult={autoPlayerResult}
+              clearAutoPlayerResult={() => {
+                setAutoPlayerResult(null);
+                setAutoPlayerLogsOpen(false);
+              }}
+              setAutoPlayerDialogOpen={setAutoPlayerDialogOpen}
+              setAutoPlayerLogsOpen={setAutoPlayerLogsOpen}
               snapshot={singleplayer}
               startNewSingleplayer={startNewSingleplayer}
+              startAutoPlayer={startAutoPlayer}
               submitSetup={submitSingleplayerSetup}
               answerTrivia={(answerIndex) =>
                 socketRef.current?.emit(socketEvents.client.singleplayerAnswerTrivia, { answerIndex })
@@ -799,35 +881,67 @@ function RoomLeaderboard({ room }: { room: RoomSnapshot }) {
 
 function SingleplayerPage({
   answerTrivia,
+  autoPlayerDialogOpen,
+  autoPlayerLoading,
+  autoPlayerLogsOpen,
+  autoPlayerResult,
   backHome,
   canSubmitSetup,
+  clearAutoPlayerResult,
   commandError,
   continueGame,
   setSetup,
+  setAutoPlayerDialogOpen,
+  setAutoPlayerLogsOpen,
   setup,
   setupSubmitAttempted,
   setupSubmitting,
   setupInput,
   setupSpend,
   snapshot,
+  startAutoPlayer,
   startNewSingleplayer,
   submitSetup
 }: {
   answerTrivia: (answerIndex: number) => void;
+  autoPlayerDialogOpen: boolean;
+  autoPlayerLoading: boolean;
+  autoPlayerLogsOpen: boolean;
+  autoPlayerResult: SingleplayerAutoRunResult | null;
   backHome: () => void;
   canSubmitSetup: boolean;
+  clearAutoPlayerResult: () => void;
   commandError: string | null;
   continueGame: () => void;
   setSetup: (setup: SetupDraft) => void;
+  setAutoPlayerDialogOpen: (open: boolean) => void;
+  setAutoPlayerLogsOpen: (open: boolean) => void;
   setup: SetupDraft;
   setupSubmitAttempted: boolean;
   setupSubmitting: boolean;
   setupInput: SetupInput | null;
   setupSpend: number;
   snapshot: SingleplayerSnapshot;
+  startAutoPlayer: (input: AutoPlayerInput) => void;
   startNewSingleplayer: () => void;
   submitSetup: () => void;
 }) {
+  if (autoPlayerLoading) {
+    return <AutoPlayerLoadingPage />;
+  }
+
+  if (autoPlayerResult) {
+    return (
+      <AutoPlayerResultPage
+        backHome={backHome}
+        continueGame={clearAutoPlayerResult}
+        logsOpen={autoPlayerLogsOpen}
+        result={autoPlayerResult}
+        setLogsOpen={setAutoPlayerLogsOpen}
+      />
+    );
+  }
+
   if (snapshot.phase === "WEATHER_REVEAL") {
     return <WeatherPage backHome={backHome} continueGame={continueGame} snapshot={snapshot} />;
   }
@@ -860,6 +974,9 @@ function SingleplayerPage({
       setupInput={setupInput}
       setupSpend={setupSpend}
       snapshot={snapshot}
+      autoPlayerDialogOpen={autoPlayerDialogOpen}
+      setAutoPlayerDialogOpen={setAutoPlayerDialogOpen}
+      startAutoPlayer={startAutoPlayer}
       submitSetup={submitSetup}
     />
   );
@@ -937,28 +1054,34 @@ function SpecialWeatherPage({
 }
 
 function SetupPage({
+  autoPlayerDialogOpen = false,
   backHome,
   canSubmitSetup,
   commandError,
   setSetup,
+  setAutoPlayerDialogOpen,
   setup,
   setupSubmitAttempted,
   setupSubmitting,
   setupInput,
   setupSpend,
   snapshot,
+  startAutoPlayer,
   submitSetup
 }: {
+  autoPlayerDialogOpen?: boolean;
   backHome: () => void;
   canSubmitSetup: boolean;
   commandError: string | null;
   setSetup: (setup: SetupDraft) => void;
+  setAutoPlayerDialogOpen?: (open: boolean) => void;
   setup: SetupDraft;
   setupSubmitAttempted: boolean;
   setupSubmitting: boolean;
   setupInput: SetupInput | null;
   setupSpend: number;
   snapshot: SingleplayerSnapshot;
+  startAutoPlayer?: (input: AutoPlayerInput) => void;
   submitSetup: () => void;
 }) {
   const updateSetup = (field: keyof SetupDraft, value: string) => {
@@ -1077,10 +1200,214 @@ function SetupPage({
 
         {commandError ? <p className="error-line">{commandError}</p> : null}
 
-        <button type="submit" disabled={!canSubmitSetup}>
-          {setupSubmitting ? "Running..." : "Run Day"}
-        </button>
+        <div className="setup-actions">
+          {setAutoPlayerDialogOpen && startAutoPlayer ? (
+            <button type="button" onClick={() => setAutoPlayerDialogOpen(true)}>
+              Auto Player
+            </button>
+          ) : null}
+          <button type="submit" disabled={!canSubmitSetup}>
+            {setupSubmitting ? "Running..." : "Run Day"}
+          </button>
+        </div>
       </form>
+
+      {autoPlayerDialogOpen && setAutoPlayerDialogOpen && startAutoPlayer ? (
+        <AutoPlayerDialog
+          closeDialog={() => setAutoPlayerDialogOpen(false)}
+          coins={snapshot.coins}
+          startAutoPlayer={startAutoPlayer}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function AutoPlayerDialog({
+  closeDialog,
+  coins,
+  startAutoPlayer
+}: {
+  closeDialog: () => void;
+  coins: number;
+  startAutoPlayer: (input: AutoPlayerInput) => void;
+}) {
+  const [draft, setDraft] = useState<AutoPlayerDraft>(emptyAutoPlayerDraft);
+  const input = parseAutoPlayerDraft(draft, coins);
+  const stopBalance = setupPreviewValue(draft.stopBalance);
+
+  return (
+    <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="auto-player-title">
+      <form
+        className="auto-player-dialog"
+        onSubmit={(event) => {
+          event.preventDefault();
+
+          if (input) {
+            startAutoPlayer(input);
+          }
+        }}
+      >
+        <p className="terminal-line">AUTO PLAYER</p>
+        <h3 id="auto-player-title">Bot shift</h3>
+        <div className="risk-grid" aria-label="Risk profile">
+          {(["safe", "balanced", "risky", "wild"] as const).map((riskProfile) => (
+            <button
+              aria-pressed={draft.riskProfile === riskProfile}
+              key={riskProfile}
+              type="button"
+              onClick={() => setDraft({ ...draft, riskProfile })}
+            >
+              {formatRiskProfile(riskProfile)}
+            </button>
+          ))}
+        </div>
+
+        <div className="auto-player-fields">
+          <NumberField
+            label="Days"
+            max={365}
+            min={1}
+            onChange={(value) => setDraft({ ...draft, days: value })}
+            value={draft.days}
+          />
+          <NumberField
+            label="Stop balance"
+            max={Math.max(0, coins - 1)}
+            min={0}
+            onChange={(value) => setDraft({ ...draft, stopBalance: value })}
+            value={draft.stopBalance}
+          />
+        </div>
+
+        {draft.days === "" ? <p className="error-line">Choose how many days the bot should play.</p> : null}
+        {stopBalance >= coins ? <p className="error-line">Stop balance must be below your current coins.</p> : null}
+
+        <div className="dialog-actions">
+          <button type="button" onClick={closeDialog}>
+            Cancel
+          </button>
+          <button type="submit" disabled={!input}>
+            Start Bot
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function AutoPlayerLoadingPage() {
+  return (
+    <div className="console-page auto-player-loading-page">
+      <div className="auto-player-scene" aria-hidden="true">
+        <div className="auto-sky">
+          <span className="auto-sun" />
+          <span className="auto-moon" />
+          <span className="auto-star star-one" />
+          <span className="auto-star star-two" />
+          <span className="auto-cloud cloud-one" />
+          <span className="auto-cloud cloud-two" />
+        </div>
+        <div className="auto-stand">
+          <span className="stand-canopy" />
+          <span className="stand-sign" />
+          <span className="stand-counter" />
+          <span className="stand-legs" />
+        </div>
+        <div className="auto-ground" />
+      </div>
+      <div className="dialog-box">
+        <p className="terminal-line">BOT AT WORK</p>
+        <h2>Running Days</h2>
+        <p>The bot is opening the stand, counting coins, and chasing the next sunrise.</p>
+        <div className="loading-meter" aria-hidden="true">
+          <span />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AutoPlayerResultPage({
+  backHome,
+  continueGame,
+  logsOpen,
+  result,
+  setLogsOpen
+}: {
+  backHome: () => void;
+  continueGame: () => void;
+  logsOpen: boolean;
+  result: SingleplayerAutoRunResult;
+  setLogsOpen: (open: boolean) => void;
+}) {
+  return (
+    <div className="console-page auto-player-result-page">
+      <BackButton backHome={backHome} />
+      <div className="dialog-box">
+        <p className="terminal-line">AUTO PLAYER RESULT</p>
+        <h2>{formatRiskProfile(result.riskProfile)} Run</h2>
+        <p>{getAutoRunStopCopy(result)}</p>
+      </div>
+
+      <dl className="auto-player-totals">
+        <div>
+          <dt>Days played</dt>
+          <dd>{result.completedDays}</dd>
+        </div>
+        <div>
+          <dt>Coins</dt>
+          <dd>
+            {result.startingCoins} to {result.endingCoins}
+          </dd>
+        </div>
+        <div>
+          <dt>Total profit</dt>
+          <dd className={result.totalProfit < 0 ? "danger" : ""}>{result.totalProfit}</dd>
+        </div>
+        <div>
+          <dt>Cups sold</dt>
+          <dd>{result.totalSoldCups}</dd>
+        </div>
+        <div>
+          <dt>Visitors</dt>
+          <dd>{result.totalVisitors}</dd>
+        </div>
+        <div>
+          <dt>Avg buy chance</dt>
+          <dd>{formatPercent(result.averagePurchaseChance)}</dd>
+        </div>
+      </dl>
+
+      <div className="page-actions">
+        <button type="button" onClick={() => setLogsOpen(!logsOpen)}>
+          {logsOpen ? "Hide Logs" : "View Logs"}
+        </button>
+        <button type="button" onClick={continueGame}>
+          Continue
+        </button>
+      </div>
+
+      {logsOpen ? (
+        <div className="auto-log-list">
+          {result.logs.map((log) => (
+            <div className="auto-log-card" key={log.day}>
+              <p className="terminal-line">
+                Day {log.day} / {log.weather.label}
+              </p>
+              <p>
+                Made <strong>{log.setup.cups}</strong> cups, <strong>{log.setup.posters}</strong>{" "}
+                posters, priced at <strong>{log.setup.price}</strong>.
+              </p>
+              <p>
+                Sold <strong>{log.result.soldCups}</strong> cups to{" "}
+                <strong>{log.result.observedVisitors}</strong> visitors for{" "}
+                <strong>{log.result.profit}</strong> profit.
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1461,6 +1788,26 @@ function sanitizeNumberInput(value: string): string {
   return String(Math.max(0, Math.floor(Number(value) || 0)));
 }
 
+function parseAutoPlayerDraft(draft: AutoPlayerDraft, coins: number): AutoPlayerInput | null {
+  const days = setupPreviewValue(draft.days);
+  const stopBalance = setupPreviewValue(draft.stopBalance);
+
+  if (
+    days < 1 ||
+    days > 365 ||
+    stopBalance < 0 ||
+    stopBalance >= coins
+  ) {
+    return null;
+  }
+
+  return {
+    days,
+    riskProfile: draft.riskProfile,
+    stopBalance
+  };
+}
+
 function parseSetupDraft(setup: SetupDraft): SetupInput | null {
   return createSetupPreview(setup);
 }
@@ -1493,6 +1840,38 @@ function createSetupPreview(setup: SetupDraft): SetupInput {
 
 function isPriceRequired(setup: SetupInput): boolean {
   return (setup.cups > 0 || setup.posters > 0) && setup.price === 0;
+}
+
+function formatRiskProfile(riskProfile: AutoPlayerRiskProfile): string {
+  if (riskProfile === "safe") {
+    return "Safe";
+  }
+
+  if (riskProfile === "balanced") {
+    return "Balanced";
+  }
+
+  if (riskProfile === "risky") {
+    return "Risky";
+  }
+
+  return "Wild";
+}
+
+function getAutoRunStopCopy(result: SingleplayerAutoRunResult): string {
+  if (result.completedDays === 0) {
+    return "The bot stopped before opening the stand.";
+  }
+
+  if (result.stopReason === "broke") {
+    return `The bot reached day ${result.endingDay}, but the stand cannot afford another cup.`;
+  }
+
+  if (result.stopReason === "stop_balance") {
+    return `The bot stopped at or below your ${result.stopBalance} coin safety line.`;
+  }
+
+  return `The bot played ${result.completedDays} day${result.completedDays === 1 ? "" : "s"} and returned control.`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

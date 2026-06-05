@@ -20,6 +20,7 @@ export const gameModeSchema = z.enum([
 export const roomVisibilitySchema = z.enum(["public", "private"]);
 export const weatherModeSchema = z.enum(["shared", "individual"]);
 export const triviaTargetingSchema = z.enum(["individual", "room_wide"]);
+export const autoPlayerRiskProfileSchema = z.enum(["safe", "balanced", "risky", "wild"]);
 
 export const nicknameSchema = z
   .string()
@@ -105,6 +106,12 @@ export const chatMessageInputSchema = z.object({
 
 export const triviaAnswerInputSchema = z.object({
   answerIndex: z.number().int().min(0).max(3)
+});
+
+export const autoPlayerInputSchema = z.object({
+  riskProfile: autoPlayerRiskProfileSchema,
+  days: z.number().int().min(1).max(365),
+  stopBalance: z.number().int().min(0)
 });
 
 export const economyConfigSchema = z.object({

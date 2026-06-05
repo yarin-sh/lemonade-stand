@@ -261,6 +261,7 @@ Chat:
 - If no local save data exists, Start Singleplayer begins a new game immediately.
 - Player can retire/save score.
 - Trivia is enabled by default according to the normal 5% chance.
+- Singleplayer setup includes an optional Auto Player tool that can simulate multiple future days from the current setup phase.
 - No AI opponents in MVP.
 
 ### Multiplayer: First to X Coins
@@ -389,10 +390,38 @@ The page contains:
 - Input for lemonade price.
 - Live total spend and affordability validation.
 - A clear submit/confirm action.
+- An Auto Player button that opens the singleplayer auto-run dialog.
 
 Use "make posters" in player-facing copy.
 
 If the player has fewer coins than the current cup cost, the setup page is skipped and the game shows a stand-closed/game-over page.
+
+#### Page 2B: Singleplayer Auto Player
+
+The Auto Player is a singleplayer-only setup helper. It lets the player gamble by letting a bot play several days automatically from the current setup phase.
+
+The dialog contains:
+
+- Risk profile: Safe, Balanced, Risky, or Wild.
+- Days to simulate, from 1 to 365.
+- Stop balance. If the bot ends a simulated day at or below this balance, the run stops.
+- Cancel and Start Bot actions.
+
+Behavior:
+
+- Auto Player controls cups, posters, and cup price.
+- Higher risk increases spend, posters, and price.
+- Auto Player applies a gain debuff after normal day simulation: Safe keeps 85% of revenue, Balanced keeps 80%, Risky keeps 75%, and Wild keeps 70%.
+- Auto Player prices are intentionally bumped by risk: Safe uses 2.2x cup cost, Balanced uses 3.4x, Risky uses 6.5x, and Wild uses 11x, before weather price tolerance and max-price caps.
+- Auto Player uses the same server-side validation and caps as a human setup, including poster cap and maximum cup price.
+- Auto Player can only start during singleplayer setup.
+- Auto Player is disabled/rejected if the player cannot afford at least one cup.
+- Stop balance must be below the player's current balance.
+- Auto Player skips trivia; trivia rewards are not attempted during auto-run days.
+- The run updates the normal singleplayer save after completion.
+- The result returns control to the player on the next day's weather page unless the stand can no longer afford one cup, in which case the game-over page is shown.
+- The UI shows a 2-5 second loading screen with a pixel-art day/night lemonade stand scene before revealing results.
+- Results show total stats first, with a View Logs button for per-day stats.
 
 #### Page 3: Daily Summary
 
@@ -1085,6 +1114,7 @@ Use shared Zod schemas for:
 - Nicknames
 - Chat messages
 - Setup input
+- Auto Player input
 - Trivia answer
 - Admin config
 
